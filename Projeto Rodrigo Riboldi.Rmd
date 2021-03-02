@@ -1,0 +1,264 @@
+---
+title: "Projeto Rodrigo Martini Riboldi"
+output: html_notebook
+---
+
+Projeto de aplicação de algoritmos de aprendizado de máquina para a disciplina de Machine Learning do curso de especialização em Big Data, Data Science e Data Analytics na Universidade do Vale do Rio dos Sinos - UNISINOS.
+
+Aluno: Rodrigo Martini Riboldi  
+Professor: Rafael Kunst  
+Ano: 2020
+
+---
+
+Para iniciar o código, removeremos quaisquer variaveis que estejam carregadas no ambiente.
+```{r}
+rm(list=ls())
+
+```
+
+Agora carregaremos todas as bibliotecas que são necessárias para a execução do código.  
+Utilizaremos as bibliotecas "caret" por apresentar uma solução completa para a preparação dos dados e treinamento do algoritmo, a biblioteca "doParallel" para criar um cluster utilizando todos os núcleos do processador e a biblioteca "pROC" para criarmos a curva ROC.  
+Pode ser necessário instalar algumas bibliotecas.
+```{r}
+library(caret)
+library(doParallel)
+library(pROC)
+
+```
+
+Com a utilização da biblioteca doParallel, criaremos um cluster para que os algoritmos sejam processados paralelamente por todas as threads do processador e sejam executados mais rapidamente.
+```{r}
+cores = 16
+cl = makePSOCKcluster(cores)
+registerDoParallel(cl)
+
+```
+
+O próximo passo é o carregamento do dataset a ser utilizado.  
+Iremos carregar o dataset "Sensorless_drive_diagnosis" que é composto por 49 colunas. Sendo as colunas 1 até 48 os sinais de corrente elétrica medidos em diferentes pontos do circuito do drive do motor e a coluna 49 as 11 diferentes condições de trabalho do motor.
+```{r}
+dataset = read.table("Sensorless_drive_diagnosis.txt",sep="")
+
+```
+
+Com o dataset carregado, iremos trocar a ultima coluna (coluna categórica das classes de falhas) de valores numéricos para factors, com nomenclaturas de Classe 1 à 11, para os classificadores a serem testados não apresentem nenhum problema durante a categorização.
+```{r}
+dataset[49] = factor(dataset$V49,ordered=T, labels=c("Classe 1","Classe 2","Classe 3","Classe 4","Classe 5","Classe 6","Classe 7","Classe 8","Classe 9","Classe 10","Classe 11"))
+
+```
+
+O próximo passo é dividir os dados em um conjunto de treinamento e um conjunto de teste.  
+O conjunto de treinamento terá 70% do tamanho total do dataset e o conjunto de dados terá os 30% restantes.
+Utilizaremos também o comando set.seed() para termos repetibilidade na execução deste código
+```{r}
+set.seed(9182)
+split = createDataPartition(dataset$V49,
+                            p=0.7,
+                            list = FALSE)
+
+treinamento = dataset[split,]
+teste = dataset[-split,]
+
+```
+
+Com os dados divididos, precisamos preparar os dados para o treinamento.  
+O primeiro passo é verificar se existem dados faltantes no nosso dataset.
+```{r}
+colSums(is.na(treinamento))
+
+```
+
+Como não temos nenhum dado faltante, não precisamos remover nenhuma linha do nosso dataset.  
+O próximo passo então, é verificar a existência de Outliers que possam atrapalhar nosso treinamento.  
+Como temos muitas colunas, iremos plotar cada uma delas separadamente para podermos visualizar melhor a existência ou não de Outliers.
+```{r}
+par(mfrow=c(1,4))
+for (i in 1:48) {
+  boxplot(treinamento[,i], main=names(treinamento)[i])
+}
+rm(i)
+
+```
+Como podemos observar, a maioria das colunas possuem uma série de Outliers que podem atrapalhar a acurácia do nosso classificador. Vamos agora remover estes Outliers do nosso conjunto de dados para treinamento.
+```{r}
+for (i in 1:48) {
+  outliers = unique(c(which(treinamento[,i] %in% boxplot.stats(treinamento[,i])$out)))
+}
+rm(i)
+
+treinamento = treinamento[-outliers,]
+
+```
+
+Com os dados já preparados, podemos partir para o treinamento dos classificadores.  
+Como temos um conjunto relativamente grande de dados, o treinamento dos classificadores pode demorar, por isso é importante utilizar a biblioteca de paralelização.  
+  
+Como não existe um "melhor classificador" e o resultado de cada um vai depender do conjunto de dados é importante treinarmos mais de um classificador para podermos comparar os resultados e métricas e podermos escolher a melhor opção possível. Para este trabalho, serão priorizados classificadores que conseguem lidar bem com um dataset contendo uma grande quantidade de dados, que consigam categorizar dados com várias classes e várias dimensões, além de priorizar classificadores que treinem de forma rápida.  
+  
+Consultando o material disponibilizado para a disciplina, podemos definir que as melhores tentativas de classificadores a serem utilizadas são as árvores de decisão. Serão então utilizados classificadores de uma única árvore (classificador CART, método "rpart" na biblioteca "caret") e comparados com árvores bagging e várias árvores aleatórias em uma random forest (metodo "rf" para random forest e "treebag" para o classificador Bagged CART, ambos da biblioteca "caret").  
+Como o dataset utilizado possui 48 dimensões e uma grande quantidade de linhas, os classificadores do tipo máquina de vetor de suporte, de análise discriminante e Naive Bayes foram descartados.  
+  
+Os parâmetros passados são os mesmos para todos os classificadores: dados de treinamento excluindo a coluna 49, onde estão nossos rótulos; coluna "V49" dos dados de treinamento, onde estão nossos rótulos; e o método de treinamento. Serão testados diferentes métodos, sem alterações nos parâmetros iniciais.
+  
+O primeiro classificador treinado será uma única árvore de decisão, utilizando o método "rpart" da biblioteca "caret"
+
+```{r}
+treinamento.rpart = train(treinamento[,-49],
+                          treinamento$V49,
+                          method="rpart")
+
+predicao.rpart = predict(treinamento.rpart,
+                         teste)
+
+matriz.rpart = confusionMatrix(predicao.rpart,
+                               teste$V49)
+
+matriz.rpart
+
+```
+
+O próximo classificador treinado será uma arvore de decisão de baggings, utilizando o método "treebag" da biblioteca "caret"
+```{r}
+treinamento.treebag = train(treinamento[,-49],
+                            treinamento$V49,
+                            ntree = 15,
+                            method="treebag")
+
+predicao.treebag = predict(treinamento.treebag,
+                           teste)
+
+matriz.treebag <- confusionMatrix(predicao.treebag,
+                                 teste$V49)
+
+matriz.treebag
+
+```
+O próximo classificador treinado será uma arvore de decisão do tipo random forest, utilizando o método "rf" da biblioteca "caret", onde 15 arvores (ntree=15) se mostraram suficiente para uma acurácia maior que 99% sem um tempo de execução elevado.
+
+```{r}
+treinamento.randomforest = train(treinamento[,-49], 
+                                 treinamento$V49,
+                                 ntree = 15,
+                                 method="rf")
+
+predicao.randomforest = predict(treinamento.randomforest, 
+                                teste)
+
+matriz.randomforest = confusionMatrix(predicao.randomforest, 
+                                      teste$V49)
+
+matriz.randomforest
+
+```
+
+Nesta etapa, terminamos com o processamento dos classificadores, podemos então parar a paralelização uma vez que apenas iremos comparar os resultados obtidos anteriormente.
+```{r}
+stopCluster(cl)
+rm(cores)
+
+```
+
+Agora iremos coparar os resultados obtidos e calcular suas métricas, para saber qual foi o melhor classificador treinado.  
+Já temos os valores de acurácia disponíveis nas matrizes de confusão impressas anteriormente. 
+```{r}
+cat(" Acurácia da árvore de decisão: ", matriz.rpart$overall[1], "\n",
+    "Acurácia da arvore bagging: ", matriz.treebag$overall[1], "\n",
+    "Acurácia da random forest: ", matriz.randomforest$overall[1], "\n")
+
+```
+
+Podemos verificar o restante das métricas, separadas por classes, com a matrix "byClass" que também é gerada pela matriz de confusão.  
+Podemos observar na primeira coluna a sensibilidade (taxa de verdadeiros positivos, também chamado de recall, apresentado novamente na sexta coluna), na segunda coluna a especificidade (taxa de verdadeiros negativos), na quinta coluna a precisão (taxa preditiva positiva) e na sétima coluna o F1 measure (score F1).  
+
+Iniciando com a árvore de decisão, vamos imprimir uma matriz com as métricas criando uma variável sem as colunas que não desejamos visualizar dentro da matrix "byClass", assim não teremos um excesso de informações na tela e conseguiremos ver os dados de forma organizada.  
+Iremos imprimir também o tempo que foi necessário para o treinamento do classificador.
+```{r}
+cat(" Árvore de decisão:","\n")
+metricas.rpart = matriz.rpart$byClass[,-c(3,4,6,8,9,10,11)]
+print(metricas.rpart)
+
+cat("Tempo de treinamento do classificador:",treinamento.rpart[["times"]][["everything"]][["elapsed"]], "segundos")
+```
+
+Seguimos agora para a árvore de decisão bagging
+```{r}
+cat(" Arvore bagging:","\n")
+metricas.treebag = matriz.treebag$byClass[,-c(3,4,6,8,9,10,11)]
+print(metricas.treebag)
+
+cat("Tempo de treinamento do classificador:",treinamento.treebag[["times"]][["everything"]][["elapsed"]], "segundos")
+```
+
+Seguimos agora para a árvore de decisão random forest
+```{r}
+cat(" Arvore random forest:","\n")
+metricas.randomforest = matriz.randomforest$byClass[,-c(3,4,6,8,9,10,11)]
+print(metricas.randomforest)
+cat("Tempo de treinamento do classificador:",treinamento.randomforest[["times"]][["everything"]][["elapsed"]], "segundos")
+```
+
+A ultima métrica a ser análisada é a curva ROC. Iremos plotar o gráfico para analisarmos o desempenho dos modelos e para o cálculo da área sobre a curva.   
+  
+Como temos classificadores com multiplas classes, utilizamos o comando "multiclass.roc" e a função "auc" para encontrarmos a área sobre a curva.  
+```{r message=FALSE, warning=FALSE}
+ROC.rpart = multiclass.roc(teste$V49, predicao.rpart)
+AUC.rpart = auc(ROC.rpart)
+
+ROC.treebag = multiclass.roc(teste$V49, predicao.treebag)
+AUC.treebag = auc(ROC.treebag)
+
+ROC.randomforest = multiclass.roc(teste$V49, predicao.randomforest)
+AUC.randomforest = auc(ROC.randomforest)
+
+cat("AUC da árvore de decisão:", AUC.rpart, "\n")
+cat("AUC da arvore baggings:", AUC.treebag, "\n")
+cat("AUC da random forest:", AUC.randomforest, "\n")
+```
+
+Como temos muitas classes, iremos ter varios cruzamentos de informações e diversas linhas serão plotadas nos nossos gráficos, ficando bastante carregado de informações, mas mesmo assim sendo claramente visível qual foi o classificador que apresentou o melhor desempenho.  
+```{r message=FALSE, warning=FALSE}
+rocks.rpart = ROC.rpart[['rocs']]
+rocks.treebag = ROC.treebag[['rocs']]
+rocks.randomforest = ROC.randomforest[['rocs']]
+
+plot.roc(rocks.rpart[[1]], 
+         main = "Árvore de decisão",
+         grid = TRUE)
+invisible(sapply(2:length(rocks.rpart),function(i) lines.roc(rocks.rpart[[i]],col=i))) #código encontrado em: https://stackoverflow.com/questions/34169774/plot-roc-for-multiclass-roc-in-proc-package
+
+plot.roc(rocks.treebag[[1]], 
+         main = "Árvore bagging",
+         grid = TRUE)
+invisible(sapply(2:length(rocks.treebag), function(i) lines.roc(rocks.treebag[[i]],col=i)))
+
+plot.roc(rocks.randomforest[[1]], 
+         main = "Random forest",
+         grid = TRUE)
+invisible(sapply(2:length(rocks.randomforest),function(i) lines.roc(rocks.randomforest[[i]],col=i)))
+```
+Para finalizar, podemos concluir que o classificador Random forest com 15 árvores foi o que apresentou o melhor desempenho. Ainda poderíamos alterar os parâmetros dos outros classificadores para conseguir resultados melhores, mas o Random forest conseguiu valores muito bons sem a necessidade da alteração de parâmetros e de forma muito rápida.  
+Isso foi possível também por estarmos trabalhando com dados balanceados, caso tivessemos dados desbalanceados poderiamos ter alterações significativas nas respostas obtidas.  
+  
+É importante ressaltar que poderiamos fazer mais algum tratamento nos dados, como a remoção de características com correlação forte, para um melhor desempenho em alguns classificadores. Em alguns testes realizados, esse tratamento melhorou levemente o desempenho da árvore de decisão, mas piorou consideravelmente o desempenho da árvore bagging e da random forest. Por este motivo, optou-se por manter os dados com todas as colunas.
+  
+Outros classificadores também foram treinados para uma comparação de performance, como redes neurais artificias e KNN, mas não apresentaram desempenho satisfatório sem um tratamento adequado dos dados e alterações nos parâmetros, além de possuirem um tempo de treinamento muito superior comparado com os outros classificadores utilizados.  
+  
+Por fim, vamos reimprimir as métricas do classificador destacado.
+```{r}
+cat(" Melhor classificador para o conjunto de dados utilizado: Random forest.","\n\n",
+    "Tempo de treinamento do classificador:",treinamento.randomforest[["times"]][["everything"]][["elapsed"]], "segundos", "\n\n",
+    "AUC da random forest:", AUC.randomforest, "\n\n")
+print(metricas.randomforest)
+
+```
+
+
+
+
+
+
+
+
+
+
